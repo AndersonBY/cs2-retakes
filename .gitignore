@@ -4,3 +4,7 @@
 /RetakesPluginShared/.idea
 *.DotSettings.user
 *.sln
+.release-staging/
+artifacts/
+[Bb]in/
+[Oo]bj/

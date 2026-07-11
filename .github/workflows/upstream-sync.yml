@@ -1,0 +1,40 @@
+name: Upstream sync
+
+on:
+  schedule:
+    - cron: '23 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Merge new upstream commits into a review branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_URL: https://github.com/B3none/cs2-retakes.git
+          UPSTREAM_BRANCH: master
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git remote add upstream "${UPSTREAM_URL}"
+          git fetch upstream "${UPSTREAM_BRANCH}"
+          if git merge-base --is-ancestor "upstream/${UPSTREAM_BRANCH}" HEAD; then
+            echo 'No new upstream commits.'
+            exit 0
+          fi
+          branch='automation/upstream-sync'
+          git checkout -B "${branch}"
+          git merge --no-edit "upstream/${UPSTREAM_BRANCH}"
+          git push --force origin HEAD:"${branch}"
+          if [[ -z "$(gh pr list --head "${branch}" --state open --json number --jq '.[0].number')" ]]; then
+            gh pr create --base master --head "${branch}" --title 'Sync upstream changes' --body 'Automated upstream merge for review. This PR is never merged or released automatically.'
+          fi
+
