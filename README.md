@@ -1,5 +1,6 @@
-[![GitHub Downloads](https://img.shields.io/github/downloads/b3none/cs2-retakes/total.svg?style=flat-square&label=Downloads)](https://github.com/b3none/cs2-retakes/releases/latest)
-![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/b3none/cs2-retakes/plugin-build.yml?branch=master&style=flat-square&label=Latest%20Build)
+> **MBSifu maintained fork.** This public fork tracks [B3none/cs2-retakes](https://github.com/B3none/cs2-retakes) and ships reviewed, reproducible Linux releases for MBSifu and the wider CS2 community. See [MAINTENANCE.md](MAINTENANCE.md) before proposing upstream sync or release changes.
+
+[![CI](https://github.com/AndersonBY/cs2-retakes/actions/workflows/ci.yml/badge.svg)](https://github.com/AndersonBY/cs2-retakes/actions/workflows/ci.yml)
 
 # CS2 Retakes
 CS2 implementation of retakes written in C# for CounterStrikeSharp. Based on the version for CS:GO by Splewis.
@@ -31,10 +32,8 @@ If you appreciate the project then please take the time to star the repository ð
 
 ## Installation
 1. Install [CounterStrike Sharp](https://github.com/roflmuffin/CounterStrikeSharp) and [Metamod:Source](https://www.sourcemm.net/downloads.php/?branch=master)
-2. Download the plugin from the [releases section](https://github.com/B3none/cs2-retakes/releases/latest):
-   - **RetakesPlugin-[version].zip** - Includes pre-configured map spawns (recommended for new installations)
-   - **RetakesPlugin-[version]-no-map-configs.zip** - Without map configurations (for custom setups)
-3. Unzip the archive and upload it to the game server into your `addons/counterstrikesharp/` directory.
+2. Download the `linux-x64.zip` asset from [this fork's Releases](https://github.com/AndersonBY/cs2-retakes/releases/latest). It includes the reviewed map spawn configurations.
+3. Extract the archive into the server's `game/csgo/` directory.
 4. Start the server and wait for the config.json file to be generated in `addons/counterstrikesharp/configs/plugins/RetakesPlugin`.
 5. Complete the configuration file with the parameters of your choice.
 
