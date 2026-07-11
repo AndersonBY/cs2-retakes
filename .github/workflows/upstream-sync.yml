@@ -13,7 +13,7 @@ jobs:
   sync:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Merge new upstream commits into a review branch
@@ -37,4 +37,3 @@ jobs:
           if [[ -z "$(gh pr list --head "${branch}" --state open --json number --jq '.[0].number')" ]]; then
             gh pr create --base master --head "${branch}" --title 'Sync upstream changes' --body 'Automated upstream merge for review. This PR is never merged or released automatically.'
           fi
-
