@@ -18,10 +18,10 @@ jobs:
   verify:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 8.0.x
       - name: Test and build
@@ -29,9 +29,8 @@ jobs:
           dotnet test tests/RetakesPlugin.Tests/RetakesPlugin.Tests.csproj -c Release --nologo
       - name: Build and validate release archive
         run: scripts/package-release.sh v3.0.5-mbsifu.0
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: cs2-retakes-${{ github.sha }}
           path: artifacts/
           if-no-files-found: error
-
