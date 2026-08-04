@@ -8,26 +8,27 @@ if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-mbsifu\.[0-9]+$ ]]; then
   exit 2
 fi
 
-if [[ "${tag%%-mbsifu.*}" != "v3.0.5" ]]; then
-  echo "release tag ${tag} does not match project version v3.0.5" >&2
+if [[ "${tag%%-mbsifu.*}" != "v3.1.1" ]]; then
+  echo "release tag ${tag} does not match project version v3.1.1" >&2
   exit 2
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 output_dir="$(mkdir -p "${repo_root}/${output_arg}" && cd "${repo_root}/${output_arg}" && pwd)"
 staging="${repo_root}/.release-staging"
+build_output="${repo_root}/build-output"
 dotnet="${DOTNET:-dotnet}"
-rm -rf "${staging}"
+rm -rf "${staging}" "${build_output}"
 mkdir -p "${staging}/addons"
 
 "${dotnet}" build "${repo_root}/RetakesPlugin/RetakesPlugin.csproj" -c Release --nologo
 plugin_dir="${staging}/addons/counterstrikesharp/plugins/RetakesPlugin"
 shared_dir="${staging}/addons/counterstrikesharp/shared/RetakesPluginShared"
 mkdir -p "${plugin_dir}" "${shared_dir}"
-install -m 0644 "${repo_root}/RetakesPlugin/bin/Release/net8.0/RetakesPlugin.dll" "${plugin_dir}/RetakesPlugin.dll"
-install -m 0644 "${repo_root}/RetakesPlugin/bin/Release/net8.0/RetakesPlugin.deps.json" "${plugin_dir}/RetakesPlugin.deps.json"
-install -m 0644 "${repo_root}/RetakesPluginShared/bin/Release/net8.0/RetakesPluginShared.dll" "${shared_dir}/RetakesPluginShared.dll"
-install -m 0644 "${repo_root}/RetakesPluginShared/bin/Release/net8.0/RetakesPluginShared.deps.json" "${shared_dir}/RetakesPluginShared.deps.json"
+install -m 0644 "${build_output}/addons/counterstrikesharp/plugins/RetakesPlugin/RetakesPlugin.dll" "${plugin_dir}/RetakesPlugin.dll"
+install -m 0644 "${build_output}/addons/counterstrikesharp/plugins/RetakesPlugin/RetakesPlugin.deps.json" "${plugin_dir}/RetakesPlugin.deps.json"
+install -m 0644 "${build_output}/addons/counterstrikesharp/shared/RetakesPluginShared/RetakesPluginShared.dll" "${shared_dir}/RetakesPluginShared.dll"
+install -m 0644 "${build_output}/addons/counterstrikesharp/shared/RetakesPluginShared/RetakesPluginShared.deps.json" "${shared_dir}/RetakesPluginShared.deps.json"
 cp -a "${repo_root}/RetakesPlugin/lang" "${plugin_dir}/lang"
 cp -a "${repo_root}/RetakesPlugin/map_config" "${plugin_dir}/map_config"
 cp "${repo_root}/README.md" "${staging}/README.md"

@@ -2,6 +2,7 @@
 /.idea
 /RetakesPlugin/.idea
 /RetakesPluginShared/.idea
+/build-output
 *.DotSettings.user
 *.sln
 .release-staging/
