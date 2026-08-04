@@ -3,6 +3,7 @@ using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Core.Attributes;
 using CounterStrikeSharp.API.Core.Capabilities;
 using CounterStrikeSharp.API.Modules.Commands;
+using CounterStrikeSharp.API.Modules.Cvars;
 using RetakesPluginShared;
 using System.Text.Json;
 
@@ -21,10 +22,10 @@ using RetakesPlugin.Commands.SpawnEditor;
 
 namespace RetakesPlugin;
 
-[MinimumApiVersion(345)]
+[MinimumApiVersion(369)]
 public class RetakesPlugin : BasePlugin, IPluginConfig<BaseConfigs>
 {
-    public const string Version = "3.0.5";
+    public const string Version = "3.1.1";
 
     #region Plugin Info
     public override string ModuleName => "Retakes Plugin";
@@ -91,6 +92,13 @@ public class RetakesPlugin : BasePlugin, IPluginConfig<BaseConfigs>
     private readonly HashSet<CCSPlayerController> _hasMutedVoices = [];
     #endregion
 
+    #region ConVars
+    public FakeConVar<bool> RetakesEnabledConVar = new("retakes_enabled", "Whether the retakes plugin is enabled or not.", true);
+    private bool _lastEnabledState = true;
+    #endregion
+
+    public bool IsPluginEnabled => RetakesEnabledConVar.Value;
+
     public RetakesPlugin()
     {
         _jsonOptions = new JsonSerializerOptions
@@ -111,6 +119,8 @@ public class RetakesPlugin : BasePlugin, IPluginConfig<BaseConfigs>
         RegisterListener<Listeners.OnMapStart>(OnMapStart);
         AddCommandListener("jointeam", OnCommandJoinTeam);
 
+        RetakesEnabledConVar.ValueChanged += OnRetakesEnabledChanged;
+
         var retakesPluginEventSender = new RetakesPluginEventSender();
         Capabilities.RegisterPluginCapability(RetakesPluginEventSenderCapability, () => retakesPluginEventSender);
 
@@ -128,8 +138,6 @@ public class RetakesPlugin : BasePlugin, IPluginConfig<BaseConfigs>
         RegisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnect, HookMode.Pre);
         RegisterEventHandler<EventPlayerTeam>(OnPlayerTeam, HookMode.Pre);
 
-        RegisterCommands();
-
         if (hotReload)
         {
             Utils.Logger.LogServer($"Update detected, restarting map...");
@@ -146,15 +154,55 @@ public class RetakesPlugin : BasePlugin, IPluginConfig<BaseConfigs>
 
         SpawnService.Reset();
 
-        AddTimer(1.0f, ServerHelper.ExecuteRetakesConfiguration);
+        AddTimer(1.0f, () =>
+        {
+            if (IsPluginEnabled)
+            {
+                ServerHelper.ExecuteRetakesConfiguration();
+            }
+        });
 
         InitializeServices(mapName);
+    }
+
+    private void OnRetakesEnabledChanged(object? sender, bool isEnabled)
+    {
+        if (isEnabled == _lastEnabledState)
+        {
+            return;
+        }
+
+        _lastEnabledState = isEnabled;
+
+        if (isEnabled)
+        {
+            Utils.Logger.LogInfo("Main", "Retakes enabled via retakes_enabled convar");
+            Server.PrintToChatAll($"{Localizer["retakes.prefix"]} {Localizer["retakes.plugin.enabled"]}");
+
+            ServerHelper.ExecuteRetakesConfiguration();
+            _gameManager?.QueueManager.SyncActivePlayersFromTeams();
+            GameRulesHelper.RestartGame();
+        }
+        else
+        {
+            Utils.Logger.LogInfo("Main", "Retakes disabled via retakes_enabled convar");
+            Server.PrintToChatAll($"{Localizer["retakes.prefix"]} {Localizer["retakes.plugin.disabled"]}");
+
+            // Make sure we don't leave the server stuck in a paused warmup
+            _gameManager?.CancelWaitingForPlayers();
+            Server.ExecuteCommand("mp_warmup_pausetimer 0");
+            ServerHelper.ExecuteRetakesUnloadConfiguration();
+            _gameManager?.QueueManager.ClearAllQueues();
+        }
     }
 
     private void InitializeServices(string mapName, string? customMapConfig = null)
     {
         try
         {
+            // A previous game manager may be holding the server in a paused warmup
+            _gameManager?.CancelWaitingForPlayers();
+
             // Initialize MapConfigService
             _mapConfigService = new MapConfigService(ModuleDirectory, customMapConfig ?? mapName, _jsonOptions);
             _mapConfigService.Load();
@@ -177,7 +225,8 @@ public class RetakesPlugin : BasePlugin, IPluginConfig<BaseConfigs>
                 Config.Team.RoundsToScramble,
                 Config.Team.IsScrambleEnabled,
                 Config.Queue.ShouldRemoveSpectators,
-                Config.Team.IsBalanceEnabled
+                Config.Team.IsBalanceEnabled,
+                Config.Game.MinimumPlayers
             );
 
             _breakerManager = new BreakerManager(
@@ -190,7 +239,8 @@ public class RetakesPlugin : BasePlugin, IPluginConfig<BaseConfigs>
                 _random,
                 _hasMutedVoices,
                 Config.MapConfig.EnableBombsiteAnnouncementVoices,
-                Config.MapConfig.EnableBombsiteAnnouncementCenter
+                Config.MapConfig.EnableBombsiteAnnouncementCenter,
+                Config.MapConfig.EnablePlantLocationAnnouncement
             );
 
             // Initialize Event Handlers
@@ -232,6 +282,8 @@ public class RetakesPlugin : BasePlugin, IPluginConfig<BaseConfigs>
             // Set command references in event handlers
             _roundEventHandlers?.SetCommandReferences(_showSpawnsCommand);
 
+            RegisterCommands();
+
             Utils.Logger.LogInfo("Services", "All services initialized successfully");
         }
         catch (Exception ex)
@@ -242,6 +294,17 @@ public class RetakesPlugin : BasePlugin, IPluginConfig<BaseConfigs>
 
     private void RegisterCommands()
     {
+        if (_forceBombsiteCommand == null || _forceBombsiteStopCommand == null ||
+            _scrambleCommand == null || _debugQueuesCommand == null ||
+            _mapConfigCommand == null || _mapConfigsCommand == null ||
+            _voicesCommand == null || _showSpawnsCommand == null ||
+            _addSpawnCommand == null || _removeSpawnCommand == null ||
+            _nearestSpawnCommand == null || _hideSpawnsCommand == null)
+        {
+            Utils.Logger.LogWarning("Commands", "Cannot register commands - command handlers not initialized");
+            return;
+        }
+
         if (!_commandRegistration.TryRegister())
         {
             Utils.Logger.LogWarning("Commands", "Commands are already registered; skipping duplicate registration");
@@ -249,40 +312,40 @@ public class RetakesPlugin : BasePlugin, IPluginConfig<BaseConfigs>
         }
 
         // Admin Commands
-        AddCommand("css_forcebombsite", "Force the retakes to occur from a single bombsite.", (player, info) => _forceBombsiteCommand?.OnCommand(player, info));
-        AddCommand("css_forcebombsitestop", "Clear the forced bombsite and return back to normal.", (player, info) => _forceBombsiteStopCommand?.OnCommand(player, info));
-        AddCommand("css_scramble", "Sets teams to scramble on the next round.", (player, info) => _scrambleCommand?.OnCommand(player, info));
-        AddCommand("css_scrambleteams", "Sets teams to scramble on the next round.", (player, info) => _scrambleCommand?.OnCommand(player, info));
-        AddCommand("css_debugqueues", "Prints the state of the queues to the console.", (player, info) => _debugQueuesCommand?.OnCommand(player, info));
+        AddCommand("css_forcebombsite", "Force the retakes to occur from a single bombsite.", (player, info) => _forceBombsiteCommand.OnCommand(player, info));
+        AddCommand("css_forcebombsitestop", "Clear the forced bombsite and return back to normal.", (player, info) => _forceBombsiteStopCommand.OnCommand(player, info));
+        AddCommand("css_scramble", "Sets teams to scramble on the next round.", (player, info) => _scrambleCommand.OnCommand(player, info));
+        AddCommand("css_scrambleteams", "Sets teams to scramble on the next round.", (player, info) => _scrambleCommand.OnCommand(player, info));
+        AddCommand("css_debugqueues", "Prints the state of the queues to the console.", (player, info) => _debugQueuesCommand.OnCommand(player, info));
 
         // Map Config Commands
-        AddCommand("css_mapconfig", "Forces a specific map config file to load.", (player, info) => _mapConfigCommand?.OnCommand(player, info));
-        AddCommand("css_setmapconfig", "Forces a specific map config file to load.", (player, info) => _mapConfigCommand?.OnCommand(player, info));
-        AddCommand("css_loadmapconfig", "Forces a specific map config file to load.", (player, info) => _mapConfigCommand?.OnCommand(player, info));
-        AddCommand("css_mapconfigs", "Displays a list of available map configs.", (player, info) => _mapConfigsCommand?.OnCommand(player, info));
-        AddCommand("css_viewmapconfigs", "Displays a list of available map configs.", (player, info) => _mapConfigsCommand?.OnCommand(player, info));
-        AddCommand("css_listmapconfigs", "Displays a list of available map configs.", (player, info) => _mapConfigsCommand?.OnCommand(player, info));
+        AddCommand("css_mapconfig", "Forces a specific map config file to load.", (player, info) => _mapConfigCommand.OnCommand(player, info));
+        AddCommand("css_setmapconfig", "Forces a specific map config file to load.", (player, info) => _mapConfigCommand.OnCommand(player, info));
+        AddCommand("css_loadmapconfig", "Forces a specific map config file to load.", (player, info) => _mapConfigCommand.OnCommand(player, info));
+        AddCommand("css_mapconfigs", "Displays a list of available map configs.", (player, info) => _mapConfigsCommand.OnCommand(player, info));
+        AddCommand("css_viewmapconfigs", "Displays a list of available map configs.", (player, info) => _mapConfigsCommand.OnCommand(player, info));
+        AddCommand("css_listmapconfigs", "Displays a list of available map configs.", (player, info) => _mapConfigsCommand.OnCommand(player, info));
 
         // Spawn Editor Commands
-        AddCommand("css_showspawns", "Show the spawns for the specified bombsite.", (player, info) => _showSpawnsCommand?.OnCommand(player, info));
-        AddCommand("css_spawns", "Show the spawns for the specified bombsite.", (player, info) => _showSpawnsCommand?.OnCommand(player, info));
-        AddCommand("css_edit", "Show the spawns for the specified bombsite.", (player, info) => _showSpawnsCommand?.OnCommand(player, info));
-        AddCommand("css_add", "Creates a new retakes spawn for the bombsite currently shown.", (player, info) => _addSpawnCommand?.OnCommand(player, info));
-        AddCommand("css_addspawn", "Creates a new retakes spawn for the bombsite currently shown.", (player, info) => _addSpawnCommand?.OnCommand(player, info));
-        AddCommand("css_new", "Creates a new retakes spawn for the bombsite currently shown.", (player, info) => _addSpawnCommand?.OnCommand(player, info));
-        AddCommand("css_newspawn", "Creates a new retakes spawn for the bombsite currently shown.", (player, info) => _addSpawnCommand?.OnCommand(player, info));
-        AddCommand("css_remove", "Deletes the nearest retakes spawn.", (player, info) => _removeSpawnCommand?.OnCommand(player, info));
-        AddCommand("css_removespawn", "Deletes the nearest retakes spawn.", (player, info) => _removeSpawnCommand?.OnCommand(player, info));
-        AddCommand("css_delete", "Deletes the nearest retakes spawn.", (player, info) => _removeSpawnCommand?.OnCommand(player, info));
-        AddCommand("css_deletespawn", "Deletes the nearest retakes spawn.", (player, info) => _removeSpawnCommand?.OnCommand(player, info));
-        AddCommand("css_nearestspawn", "Goes to nearest retakes spawn.", (player, info) => _nearestSpawnCommand?.OnCommand(player, info));
-        AddCommand("css_nearest", "Goes to nearest retakes spawn.", (player, info) => _nearestSpawnCommand?.OnCommand(player, info));
-        AddCommand("css_hidespawns", "Exits the spawn editing mode.", (player, info) => _hideSpawnsCommand?.OnCommand(player, info));
-        AddCommand("css_done", "Exits the spawn editing mode.", (player, info) => _hideSpawnsCommand?.OnCommand(player, info));
-        AddCommand("css_exitedit", "Exits the spawn editing mode.", (player, info) => _hideSpawnsCommand?.OnCommand(player, info));
+        AddCommand("css_showspawns", "Show the spawns for the specified bombsite.", (player, info) => _showSpawnsCommand.OnCommand(player, info));
+        AddCommand("css_spawns", "Show the spawns for the specified bombsite.", (player, info) => _showSpawnsCommand.OnCommand(player, info));
+        AddCommand("css_edit", "Show the spawns for the specified bombsite.", (player, info) => _showSpawnsCommand.OnCommand(player, info));
+        AddCommand("css_add", "Creates a new retakes spawn for the bombsite currently shown.", (player, info) => _addSpawnCommand.OnCommand(player, info));
+        AddCommand("css_addspawn", "Creates a new retakes spawn for the bombsite currently shown.", (player, info) => _addSpawnCommand.OnCommand(player, info));
+        AddCommand("css_new", "Creates a new retakes spawn for the bombsite currently shown.", (player, info) => _addSpawnCommand.OnCommand(player, info));
+        AddCommand("css_newspawn", "Creates a new retakes spawn for the bombsite currently shown.", (player, info) => _addSpawnCommand.OnCommand(player, info));
+        AddCommand("css_remove", "Deletes the nearest retakes spawn.", (player, info) => _removeSpawnCommand.OnCommand(player, info));
+        AddCommand("css_removespawn", "Deletes the nearest retakes spawn.", (player, info) => _removeSpawnCommand.OnCommand(player, info));
+        AddCommand("css_delete", "Deletes the nearest retakes spawn.", (player, info) => _removeSpawnCommand.OnCommand(player, info));
+        AddCommand("css_deletespawn", "Deletes the nearest retakes spawn.", (player, info) => _removeSpawnCommand.OnCommand(player, info));
+        AddCommand("css_nearestspawn", "Goes to nearest retakes spawn.", (player, info) => _nearestSpawnCommand.OnCommand(player, info));
+        AddCommand("css_nearest", "Goes to nearest retakes spawn.", (player, info) => _nearestSpawnCommand.OnCommand(player, info));
+        AddCommand("css_hidespawns", "Exits the spawn editing mode.", (player, info) => _hideSpawnsCommand.OnCommand(player, info));
+        AddCommand("css_done", "Exits the spawn editing mode.", (player, info) => _hideSpawnsCommand.OnCommand(player, info));
+        AddCommand("css_exitedit", "Exits the spawn editing mode.", (player, info) => _hideSpawnsCommand.OnCommand(player, info));
 
         // Player Commands
-        AddCommand("css_voices", "Toggles whether or not you want to hear bombsite voice announcements.", (player, info) => _voicesCommand?.OnCommand(player, info));
+        AddCommand("css_voices", "Toggles whether or not you want to hear bombsite voice announcements.", (player, info) => _voicesCommand.OnCommand(player, info));
 
         Utils.Logger.LogInfo("Commands", "All commands registered successfully");
     }
@@ -291,61 +354,117 @@ public class RetakesPlugin : BasePlugin, IPluginConfig<BaseConfigs>
     #region Event Handlers
     private HookResult OnPlayerConnectFull(EventPlayerConnectFull @event, GameEventInfo info)
     {
+        if (!IsPluginEnabled)
+        {
+            return HookResult.Continue;
+        }
+
         return _playerEventHandlers?.OnPlayerConnectFull(@event, info) ?? HookResult.Continue;
     }
 
     private HookResult OnRoundPreStart(EventRoundPrestart @event, GameEventInfo info)
     {
+        if (!IsPluginEnabled)
+        {
+            return HookResult.Continue;
+        }
+
         return _roundEventHandlers?.OnRoundPreStart(@event, info) ?? HookResult.Continue;
     }
 
     private HookResult OnRoundStart(EventRoundStart @event, GameEventInfo info)
     {
+        if (!IsPluginEnabled)
+        {
+            return HookResult.Continue;
+        }
+
         return _roundEventHandlers?.OnRoundStart(@event, info) ?? HookResult.Continue;
     }
 
     private HookResult OnRoundPostStart(EventRoundPoststart @event, GameEventInfo info)
     {
+        if (!IsPluginEnabled)
+        {
+            return HookResult.Continue;
+        }
+
         return _roundEventHandlers?.OnRoundPostStart(@event, info) ?? HookResult.Continue;
     }
 
     private HookResult OnRoundFreezeEnd(EventRoundFreezeEnd @event, GameEventInfo info)
     {
+        if (!IsPluginEnabled)
+        {
+            return HookResult.Continue;
+        }
+
         return _roundEventHandlers?.OnRoundFreezeEnd(@event, info) ?? HookResult.Continue;
     }
 
     private HookResult OnRoundEnd(EventRoundEnd @event, GameEventInfo info)
     {
+        if (!IsPluginEnabled)
+        {
+            return HookResult.Continue;
+        }
+
         return _roundEventHandlers?.OnRoundEnd(@event, info) ?? HookResult.Continue;
     }
 
     private HookResult OnPlayerSpawn(EventPlayerSpawn @event, GameEventInfo info)
     {
+        if (!IsPluginEnabled)
+        {
+            return HookResult.Continue;
+        }
+
         return _playerEventHandlers?.OnPlayerSpawn(@event, info) ?? HookResult.Continue;
     }
 
     private HookResult OnPlayerDeath(EventPlayerDeath @event, GameEventInfo info)
     {
+        if (!IsPluginEnabled)
+        {
+            return HookResult.Continue;
+        }
+
         return _playerEventHandlers?.OnPlayerDeath(@event, info) ?? HookResult.Continue;
     }
 
     private HookResult OnBombPlanted(EventBombPlanted @event, GameEventInfo info)
     {
+        if (!IsPluginEnabled)
+        {
+            return HookResult.Continue;
+        }
+
         return _roundEventHandlers?.OnBombPlanted(@event, info) ?? HookResult.Continue;
     }
 
     private HookResult OnBombDefused(EventBombDefused @event, GameEventInfo info)
     {
+        if (!IsPluginEnabled)
+        {
+            return HookResult.Continue;
+        }
+
         return _roundEventHandlers?.OnBombDefused(@event, info) ?? HookResult.Continue;
     }
 
     private HookResult OnPlayerDisconnect(EventPlayerDisconnect @event, GameEventInfo info)
     {
+        // Always run so we never leave stale players in the queues
         return _playerEventHandlers?.OnPlayerDisconnect(@event, info) ?? HookResult.Continue;
     }
 
     private HookResult OnPlayerTeam(EventPlayerTeam @event, GameEventInfo info)
     {
+        if (!IsPluginEnabled)
+        {
+            return HookResult.Continue;
+        }
+
         return _playerEventHandlers?.OnPlayerTeam(@event, info) ?? HookResult.Continue;
     }
     #endregion
@@ -353,6 +472,11 @@ public class RetakesPlugin : BasePlugin, IPluginConfig<BaseConfigs>
     #region Command Handlers
     private HookResult OnCommandJoinTeam(CCSPlayerController? player, CommandInfo commandInfo)
     {
+        if (!IsPluginEnabled)
+        {
+            return HookResult.Continue;
+        }
+
         if (_gameManager == null)
         {
             Utils.Logger.LogWarning("Commands", "Game manager not loaded");
@@ -372,13 +496,8 @@ public class RetakesPlugin : BasePlugin, IPluginConfig<BaseConfigs>
         var response = _gameManager.QueueManager.PlayerJoinedTeam(player, fromTeam, toTeam);
         _gameManager.QueueManager.DebugQueues(false);
 
-        if (_gameManager.QueueManager.ActivePlayers.Count == 0)
-        {
-            Utils.Logger.LogDebug("Commands", "No active players, updating queue and restarting game");
-            _gameManager.QueueManager.ClearRoundTeams();
-            _gameManager.QueueManager.Update();
-            GameRulesHelper.RestartGame();
-        }
+        _gameManager.CheckMinimumPlayers();
+        _gameManager.RestartGameIfEmpty();
 
         return response;
     }
@@ -387,6 +506,12 @@ public class RetakesPlugin : BasePlugin, IPluginConfig<BaseConfigs>
     public override void Unload(bool hotReload)
     {
         Utils.Logger.LogInfo("Main", "Plugin unloading...");
+
+        if (!hotReload)
+        {
+            ServerHelper.ExecuteRetakesUnloadConfiguration();
+        }
+
         base.Unload(hotReload);
     }
 }
